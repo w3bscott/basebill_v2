@@ -1,22 +1,23 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, use } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { Invoice } from '@/types/invoice'
 
-export default function PayPage({ params }: { params: { id: string } }) {
+export default function PayPage({ params }: { params: Promise<{ id: string }> }) {
+  const resolvedParams = use(params)
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [notFound, setNotFound] = useState(false)
 
   useEffect(() => {
-    fetch(`/api/invoices/${params.id}`)
+    fetch(`/api/invoices/${resolvedParams.id}`)
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(d => setInvoice(d.invoice))
       .catch(() => setNotFound(true))
-  }, [params.id])
+  }, [resolvedParams.id])
 
   if (notFound) return (
     <main className="flex min-h-screen items-center justify-center p-8">

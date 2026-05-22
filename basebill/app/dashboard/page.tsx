@@ -6,10 +6,20 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { Invoice } from '@/types/invoice'
 
-const PLACEHOLDER_WALLET = '0xPLACEHOLDER' // replaced with wagmi address in Stage 3
+const WALLET_STORAGE_KEY = 'basebill:creator-wallet'
+
+function getStoredWallet() {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+
+  return window.localStorage.getItem(WALLET_STORAGE_KEY) ?? ''
+}
 
 const statusClass: Record<string, string> = {
   paid: 'bg-green-100 text-green-800',
@@ -19,14 +29,52 @@ const statusClass: Record<string, string> = {
 
 export default function DashboardPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [loading, setLoading] = useState(true)
+  const [wallet, setWallet] = useState(getStoredWallet)
+  const [loading, setLoading] = useState(Boolean(wallet))
 
   useEffect(() => {
-    fetch(`/api/invoices/wallet/${PLACEHOLDER_WALLET}`)
-      .then(r => r.json())
-      .then(d => setInvoices(d.invoices ?? []))
-      .finally(() => setLoading(false))
+    if (wallet) {
+      void fetchInvoices(wallet)
+      return
+    }
+
+    setLoading(false)
   }, [])
+
+  async function fetchInvoices(address: string) {
+    setLoading(true)
+
+    try {
+      const response = await fetch(`/api/invoices/wallet/${encodeURIComponent(address)}`)
+      const data = await response.json()
+
+      if (!response.ok) {
+        toast.error(data.error ?? 'Unable to load invoices.')
+        setInvoices([])
+        return
+      }
+
+      setInvoices(data.invoices ?? [])
+    } catch {
+      toast.error('Unable to load invoices.')
+      setInvoices([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleWalletSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
+    const trimmedWallet = wallet.trim()
+    if (!trimmedWallet) {
+      toast.error('Enter a wallet address to view invoices.')
+      return
+    }
+
+    window.localStorage.setItem(WALLET_STORAGE_KEY, trimmedWallet)
+    await fetchInvoices(trimmedWallet)
+  }
 
   function copyLink(id: string) {
     navigator.clipboard.writeText(`${window.location.origin}/pay/${id}`)
@@ -34,15 +82,35 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen p-8 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <main className="mx-auto min-h-screen max-w-3xl p-8">
+      <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">My Invoices</h1>
         <Link href="/create">
           <Button>+ New Invoice</Button>
         </Link>
       </div>
 
-      {loading ? (
+      {!wallet && !loading ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Load your invoices</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleWalletSubmit} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="wallet">Creator Wallet</Label>
+                <Input
+                  id="wallet"
+                  placeholder="0x..."
+                  value={wallet}
+                  onChange={e => setWallet(e.target.value)}
+                />
+              </div>
+              <Button type="submit">View Invoices</Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : loading ? (
         <div className="flex flex-col gap-3">
           {[1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}
         </div>
@@ -57,11 +125,11 @@ export default function DashboardPage() {
         <div className="flex flex-col gap-3">
           {invoices.map(inv => (
             <Card key={inv.id}>
-              <CardContent className="flex items-center justify-between pt-4 pb-4">
+              <CardContent className="flex items-center justify-between pb-4 pt-4">
                 <div className="flex flex-col gap-1">
                   <p className="font-medium">{inv.label}</p>
                   <p className="text-sm text-muted-foreground">
-                    {Number(inv.amount_usdc).toFixed(2)} USDC · {new Date(inv.created_at).toLocaleDateString()}
+                    {Number(inv.amount_usdc).toFixed(2)} USDC - {new Date(inv.created_at).toLocaleDateString()}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

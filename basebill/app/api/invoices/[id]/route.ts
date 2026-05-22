@@ -3,12 +3,13 @@ import { supabase } from '@/lib/supabase'
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const resolvedParams = await params
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
-    .eq('id', params.id)
+    .eq('id', resolvedParams.id)
     .single()
 
   if (error || !data) {
@@ -20,8 +21,9 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const resolvedParams = await params
   const body = await req.json()
   const { status, tx_hash } = body
 
@@ -36,7 +38,7 @@ export async function PATCH(
       ...(status && { status }),
       ...(tx_hash && { tx_hash })
     })
-    .eq('id', params.id)
+    .eq('id', resolvedParams.id)
     .select()
     .single()
 

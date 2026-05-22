@@ -5,7 +5,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { label, amount_usdc, description, due_date, forward_to, creator_wallet } = body
 
-  if (!creator_wallet || typeof creator_wallet !== 'string' || creator_wallet === '0xPLACEHOLDER') {
+  if (!creator_wallet || typeof creator_wallet !== 'string') {
     return NextResponse.json({ error: 'Valid creator_wallet required' }, { status: 400 })
   }
   if (!amount_usdc || Number(amount_usdc) <= 0) {
