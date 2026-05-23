@@ -28,18 +28,16 @@ const statusClass: Record<string, string> = {
 }
 
 export default function DashboardPage() {
+  const [storedWallet] = useState(getStoredWallet)
   const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [wallet, setWallet] = useState(getStoredWallet)
-  const [loading, setLoading] = useState(Boolean(wallet))
+  const [wallet, setWallet] = useState(storedWallet)
+  const [loading, setLoading] = useState(Boolean(storedWallet))
 
   useEffect(() => {
-    if (wallet) {
-      void fetchInvoices(wallet)
-      return
+    if (storedWallet) {
+      void fetchInvoices(storedWallet)
     }
-
-    setLoading(false)
-  }, [])
+  }, [storedWallet])
 
   async function fetchInvoices(address: string) {
     setLoading(true)
