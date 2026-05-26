@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { encodeFunctionData, isAddress, parseUnits } from 'viem'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,24 +30,18 @@ const statusLabel: Record<string, string> = {
   expired: 'Expired'
 }
 
-function isAddress(value: string): value is `0x${string}` {
-  return /^0x[a-fA-F0-9]{40}$/.test(value)
-}
-
-function parseUsdcAmount(value: number) {
-  const [whole, fraction = ''] = String(value).split('.')
-  const normalizedFraction = fraction.padEnd(6, '0').slice(0, 6)
-
-  return BigInt(whole) * BigInt('1000000') + BigInt(normalizedFraction)
-}
-
-function encodeTransferData(to: `0x${string}`, amount: bigint) {
-  const methodId = 'a9059cbb'
-  const encodedTo = to.slice(2).padStart(64, '0')
-  const encodedAmount = amount.toString(16).padStart(64, '0')
-
-  return `0x${methodId}${encodedTo}${encodedAmount}`
-}
+const erc20Abi = [
+  {
+    name: 'transfer',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' }
+    ],
+    outputs: [{ name: '', type: 'bool' }]
+  }
+] as const
 
 async function waitForReceipt(txHash: string) {
   const ethereum = window.ethereum
@@ -142,10 +137,14 @@ export function PayClient({ id }: { id: string }) {
         params: [{
           from: address,
           to: USDC_SEPOLIA,
-          data: encodeTransferData(
-            recipient,
-            parseUsdcAmount(invoice.amount_usdc)
-          )
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: 'transfer',
+            args: [
+              recipient,
+              parseUnits(String(invoice.amount_usdc), 6)
+            ]
+          })
         }]
       })
 

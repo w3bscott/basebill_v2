@@ -4,6 +4,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { NavigationBar } from "@/components/NavigationBar";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import Web3Provider from "@/providers/Web3Provider";
 
 export const metadata: Metadata = {
   title: "BaseBill",
@@ -31,11 +32,13 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <NavigationBar />
-          <div className="flex-1 pt-16">
-            {children}
-          </div>
-          <Toaster />
+          <Web3Provider>
+            <NavigationBar />
+            <div className="flex-1 pt-16">
+              {children}
+            </div>
+            <Toaster />
+          </Web3Provider>
         </ThemeProvider>
       </body>
 
