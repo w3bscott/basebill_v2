@@ -140,10 +140,13 @@ Pay Flow:
   - validates recipient wallet address
   - pays creator_wallet by default, or forward_to when present
   - switches wallet to Base Sepolia using wallet_switchEthereumChain
+  - falls back to wallet_addEthereumChain if Base Sepolia is missing in the wallet
   - sends USDC transfer through eth_sendTransaction
-  - encodes ERC-20 transfer calldata directly
-  - waits briefly for the transaction receipt
-  - PATCHes the invoice to paid with tx_hash
+  - encodes ERC-20 transfer calldata using viem encodeFunctionData + parseUnits
+  - estimates gas via eth_estimateGas, applies a buffer, and caps to avoid "exceeds max transaction gas limit"
+  - writes tx_hash to Supabase immediately after submission
+  - waits for the transaction receipt and only marks invoice paid on success
+  - does not mark paid on revert/timeout (shows a pending confirmation message instead)
 
 USDC / Chain Details:
 - Base Sepolia chain id: 0x14a34
@@ -199,4 +202,3 @@ Turbopack dev server hang and the steps taken to fix it.
 
 You're now fully set up to proceed using wagmi and OnchainKit without the compilation hangs!
 --but not migrated at this stage
-

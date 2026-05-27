@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { encodeFunctionData, isAddress, parseUnits } from 'viem'
+import {
+  decodeFunctionResult,
+  encodeFunctionData,
+  formatUnits,
+  isAddress,
+  parseUnits
+} from 'viem'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,7 +21,6 @@ import type { Invoice } from '@/types/invoice'
 
 const USDC_SEPOLIA: `0x${string}` =
   '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
-
 const BASE_SEPOLIA_CHAIN_ID = '0x14a34'
 
 const statusClass: Record<string, string> = {
@@ -40,8 +45,95 @@ const erc20Abi = [
       { name: 'amount', type: 'uint256' }
     ],
     outputs: [{ name: '', type: 'bool' }]
+  },
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }]
   }
 ] as const
+
+function bigintToHex(value: bigint) {
+  return `0x${value.toString(16)}`
+}
+
+async function ensureBaseSepoliaChain() {
+  const ethereum = window.ethereum
+  if (!ethereum) return
+
+  try {
+    await ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: BASE_SEPOLIA_CHAIN_ID }]
+    })
+  } catch (error) {
+    // If the chain isn't added in the wallet yet, try adding it then switching.
+    try {
+      await ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [
+          {
+            chainId: BASE_SEPOLIA_CHAIN_ID,
+            chainName: 'Base Sepolia',
+            nativeCurrency: { name: 'Ethereum', symbol: 'ETH', decimals: 18 },
+            rpcUrls: ['https://sepolia.base.org'],
+            blockExplorerUrls: ['https://sepolia.basescan.org']
+          }
+        ]
+      })
+
+      await ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_SEPOLIA_CHAIN_ID }]
+      })
+    } catch {
+      throw error
+    }
+  }
+}
+
+async function estimateGas(params: Record<string, unknown>) {
+  const ethereum = window.ethereum
+  if (!ethereum) return null
+
+  const gasHex = await ethereum.request({
+    method: 'eth_estimateGas',
+    params: [params]
+  })
+
+  if (typeof gasHex !== 'string') return null
+  return gasHex
+}
+
+async function getUsdcBalance(account: `0x${string}`) {
+  const ethereum = window.ethereum
+  if (!ethereum) return null
+
+  const result = await ethereum.request({
+    method: 'eth_call',
+    params: [
+      {
+        to: USDC_SEPOLIA,
+        data: encodeFunctionData({
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [account]
+        })
+      },
+      'latest'
+    ]
+  })
+
+  if (typeof result !== 'string') return null
+
+  return decodeFunctionResult({
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    data: result as `0x${string}`
+  })
+}
 
 async function waitForReceipt(txHash: string) {
   const ethereum = window.ethereum
@@ -53,17 +145,15 @@ async function waitForReceipt(txHash: string) {
       params: [txHash]
     })
 
-    if (
-      receipt &&
-      typeof receipt === 'object' &&
-      'status' in receipt &&
-      receipt.status === '0x1'
-    ) {
-      return
+    if (receipt && typeof receipt === 'object' && 'status' in receipt) {
+      if (receipt.status === '0x1') return 'success' as const
+      if (receipt.status === '0x0') return 'failed' as const
     }
 
     await new Promise(resolve => setTimeout(resolve, 2000))
   }
+
+  return 'timeout' as const
 }
 
 export function PayClient({ id }: { id: string }) {
@@ -118,6 +208,11 @@ export function PayClient({ id }: { id: string }) {
         return
       }
 
+      if (!isAddress(USDC_SEPOLIA)) {
+        toast.error('Invalid USDC contract address.')
+        return
+      }
+
       const recipient = invoice.forward_to?.trim() || invoice.creator_wallet
 
       if (!isAddress(recipient)) {
@@ -127,25 +222,75 @@ export function PayClient({ id }: { id: string }) {
 
       setSubmitting(true)
 
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BASE_SEPOLIA_CHAIN_ID }]
+      await ensureBaseSepoliaChain()
+
+      if (!isAddress(address)) {
+        toast.error('Invalid connected wallet address.')
+        return
+      }
+
+      const transferAmount = parseUnits(String(invoice.amount_usdc), 6)
+      const currentBalance = await getUsdcBalance(address)
+
+      if (currentBalance !== null && currentBalance < transferAmount) {
+        toast.error(
+          `Insufficient Base Sepolia USDC. Balance: ${formatUnits(
+            currentBalance,
+            6
+          )} USDC`
+        )
+        return
+      }
+
+      const transferData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'transfer',
+        args: [
+          recipient,
+          transferAmount
+        ]
+      })
+
+      const txForWallet: Record<string, unknown> = {
+        from: address,
+        to: USDC_SEPOLIA,
+        data: transferData,
+        value: '0x0'
+      }
+
+      // Estimate gas and set a cap. Some wallets/RPCs will otherwise submit an
+      // absurdly high gas value and get rejected ("exceeds max transaction gas limit").
+      try {
+        const estimatedGasHex = await estimateGas(txForWallet)
+        if (estimatedGasHex) {
+          const estimatedGas = BigInt(estimatedGasHex)
+          const paddedGas =
+            (estimatedGas * BigInt('120')) / BigInt('100')
+          const cappedGas =
+            paddedGas > BigInt('500000')
+              ? BigInt('500000')
+              : paddedGas
+          txForWallet.gas = bigintToHex(cappedGas)
+        } else {
+          txForWallet.gas = '0x249f0' // 150,000
+        }
+      } catch {
+        txForWallet.gas = '0x249f0' // 150,000
+      }
+
+      console.info('BaseBill USDC transfer request', {
+        chainId: BASE_SEPOLIA_CHAIN_ID,
+        contract: USDC_SEPOLIA,
+        from: address,
+        recipient,
+        amountUsdc: invoice.amount_usdc,
+        amountBaseUnits: transferAmount.toString(),
+        request: txForWallet
       })
 
       const hash = await window.ethereum.request({
         method: 'eth_sendTransaction',
-        params: [{
-          from: address,
-          to: USDC_SEPOLIA,
-          data: encodeFunctionData({
-            abi: erc20Abi,
-            functionName: 'transfer',
-            args: [
-              recipient,
-              parseUnits(String(invoice.amount_usdc), 6)
-            ]
-          })
-        }]
+        params: [txForWallet]
       })
 
       if (typeof hash !== 'string') {
@@ -153,8 +298,30 @@ export function PayClient({ id }: { id: string }) {
       }
 
       setTxHash(hash)
-      toast.success('Payment submitted. Waiting for confirmation.')
-      await waitForReceipt(hash)
+      toast.success('Transaction submitted. Waiting for confirmation...')
+
+      // Store tx_hash early so the payer can still see it even if confirmation is slow.
+      try {
+        await fetch(`/api/invoices/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tx_hash: hash
+          })
+        })
+      } catch {
+        // non-fatal
+      }
+
+      const outcome = await waitForReceipt(hash)
+      if (outcome === 'failed') {
+        toast.error('Transaction reverted.')
+        return
+      }
+      if (outcome === 'timeout') {
+        toast.message('Transaction pending confirmation in wallet/RPC.')
+        return
+      }
 
       const res = await fetch(`/api/invoices/${id}`, {
         method: 'PATCH',
@@ -164,13 +331,13 @@ export function PayClient({ id }: { id: string }) {
           tx_hash: hash
         })
       })
-      const data = await res.json()
+      const responseData = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.error ?? 'Unable to update invoice.')
+        throw new Error(responseData.error ?? 'Unable to update invoice.')
       }
 
-      setInvoice(data.invoice)
+      setInvoice(responseData.invoice)
       toast.success('Payment confirmed and invoice marked as paid.')
     } catch (err) {
       console.error(err)
