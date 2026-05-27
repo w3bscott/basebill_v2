@@ -300,19 +300,6 @@ export function PayClient({ id }: { id: string }) {
       setTxHash(hash)
       toast.success('Transaction submitted. Waiting for confirmation...')
 
-      // Store tx_hash early so the payer can still see it even if confirmation is slow.
-      try {
-        await fetch(`/api/invoices/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tx_hash: hash
-          })
-        })
-      } catch {
-        // non-fatal
-      }
-
       const outcome = await waitForReceipt(hash)
       if (outcome === 'failed') {
         toast.error('Transaction reverted.')
@@ -323,22 +310,22 @@ export function PayClient({ id }: { id: string }) {
         return
       }
 
-      const res = await fetch(`/api/invoices/${id}`, {
-        method: 'PATCH',
+      const response = await fetch('/api/invoices/mark-paid', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          status: 'paid',
+          invoice_id: id,
           tx_hash: hash
         })
       })
-      const responseData = await res.json()
+      const responseData = await response.json()
 
-      if (!res.ok) {
-        throw new Error(responseData.error ?? 'Unable to update invoice.')
+      if (!response.ok) {
+        throw new Error(responseData.error ?? 'Unable to verify payment.')
       }
 
       setInvoice(responseData.invoice)
-      toast.success('Payment confirmed and invoice marked as paid.')
+      toast.success('Payment successful.')
     } catch (err) {
       console.error(err)
       toast.error('Payment failed.')
@@ -450,7 +437,7 @@ export function PayClient({ id }: { id: string }) {
 
                 {txHash && (
                   <p className="text-sm text-green-600 text-center">
-                    Payment sent. Invoice will confirm shortly.
+                    Payment sent. Waiting for wallet confirmation.
                   </p>
                 )}
               </>

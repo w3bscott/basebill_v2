@@ -144,8 +144,8 @@ Pay Flow:
   - sends USDC transfer through eth_sendTransaction
   - encodes ERC-20 transfer calldata using viem encodeFunctionData + parseUnits
   - estimates gas via eth_estimateGas, applies a buffer, and caps to avoid "exceeds max transaction gas limit"
-  - writes tx_hash to Supabase immediately after submission
-  - waits for the transaction receipt and only marks invoice paid on success
+  - originally wrote tx_hash to Supabase immediately after submission; this was later hardened in Stage 4
+  - originally marked invoice paid after a successful wallet receipt; this was later moved behind backend receipt verification in Stage 4
   - does not mark paid on revert/timeout (shows a pending confirmation message instead)
 
 USDC / Chain Details:
@@ -202,3 +202,100 @@ Turbopack dev server hang and the steps taken to fix it.
 
 You're now fully set up to proceed using wagmi and OnchainKit without the compilation hangs!
 --but not migrated at this stage
+
+
+Found it. The transaction request was malformed because USDC_SEPOLIA had accidentally become an empty string in components/PayClient.tsx:22, with the real address sitting on the next line as stray text. So MetaMask was effectively receiving:
+
+{
+  from: yourWallet,
+  to: '',
+  data: transfer(...),
+  value: '0x0',
+  gas: ...
+}
+That explains Invalid params / invalid string length: the to contract address was invalid. I fixed it back to:
+
+'0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+I also added a runtime guard at components/PayClient.tsx:211 so if the token contract address is ever malformed again, the app stops with Invalid USDC contract address before opening MetaMask.
+
+The request now targets the actual Base Sepolia USDC contract, and the console log BaseBill USDC transfer request will show the full wallet request before submission. 
+
+------------------------------------------
+stage 3 completed
+------------------------------------------
+
+
+Stage 4 - Hybrid Payment Confirmation + Finality Hardening (27 May 2026)
+
+Status:
+- Core finality and exact-match verification rules are implemented.
+- The browser payment flow no longer directly mutates invoice status.
+- Payment confirmation now uses a hybrid flow: wallet receipt first, then backend receipt verification through POST /api/invoices/mark-paid.
+- The indexer is removed from the payment-critical UI path and remains an optional repair/fallback system.
+
+Finality Rules Added:
+- Public invoice reads remain available through GET /api/invoices/[id].
+- PATCH /api/invoices/[id] is now protected with INDEXER_SECRET.
+- PATCH rejects all status changes, including paid/pending/expired.
+- PATCH can only attach a valid tx_hash to a pending invoice.
+- Finalized invoices cannot be updated through PATCH.
+- Pending-only update guards were added so paid and expired invoices cannot be reversed by a stale request.
+
+Backend Verification Added:
+- Added public route: POST /api/invoices/mark-paid.
+- Accepts invoice_id + tx_hash.
+- Fetches the transaction receipt from Base Sepolia only.
+- Requires successful receipt status.
+- Requires the transaction target to be the Base Sepolia USDC contract.
+- Verifies a successful USDC Transfer log before marking paid.
+- Enforces exact match:
+  - token contract must be Base Sepolia USDC: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+  - recipient must be creator_wallet or forward_to
+  - amount must equal the invoice amount in 6-decimal USDC base units
+  - invoice must still be pending
+- Marks paid and stores tx_hash only after the onchain receipt matches every rule.
+
+Optional Indexer Verification:
+- POST /api/invoices/indexer/verify remains protected with INDEXER_SECRET.
+- It reuses the same backend verification helper as /api/invoices/mark-paid.
+- It is no longer needed for the normal payment UI path.
+- Its role is cron/repair only: scan pending invoices, repair missed updates, and never override paid invoices.
+
+Indexer Expiry Added:
+- Added protected route: POST /api/invoices/indexer/expire.
+- Requires Authorization: Bearer INDEXER_SECRET.
+- Only pending invoices can transition to expired.
+- Paid invoices are skipped and never reversed.
+- Already expired invoices are skipped idempotently.
+
+Idempotency Protections Added:
+- tx_hash is normalized to lowercase before storage.
+- Re-attaching the same tx_hash to the same pending invoice returns a skipped response.
+- A tx_hash already stored on another invoice is rejected.
+- Re-running verification on an already paid invoice returns a skipped response.
+- Database updates are guarded with eq('status', 'pending') so repeated jobs cannot overwrite final state.
+
+Pay Flow Adjustment:
+- components/PayClient.tsx still sends the USDC transfer directly through the wallet.
+- The transaction request targets the verified Base Sepolia USDC contract and logs the request details in the browser console.
+- After wallet/RPC confirmation, the UI calls POST /api/invoices/mark-paid with invoice_id + tx_hash.
+- The UI shows "Payment successful" after the backend verifies and marks the invoice paid.
+- The UI no longer depends on indexer completion.
+
+Environment Required:
+- INDEXER_SECRET must be set in .env.local and in production.
+- Internal indexer/cron calls must send:
+  Authorization: Bearer <INDEXER_SECRET>
+
+Remaining Stage 4 Work:
+- Add a scheduled indexer/cron runner that scans pending invoices automatically and repairs missed backend updates.
+- Add persistent block cursor storage if the indexer scans chain logs directly.
+- Add a database uniqueness constraint or unique index for tx_hash when not null, so idempotency is enforced at the database layer too.
+- Add integration tests or route tests for paid immutability, duplicate tx_hash rejection, exact amount mismatch, wrong recipient, wrong token, and expiry behavior.
+
+System Invariant:
+- Invoice paid state equals a backend-verified onchain receipt.
+- Frontend is only a UX layer.
+- Blockchain remains the source of truth.
+- Backend enforces validation before state changes.
+- Indexer is fallback repair infrastructure, not the normal payment confirmation path.
