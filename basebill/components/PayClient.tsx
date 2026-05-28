@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import ConnectButton from '@/components/ConnectButton'
 import { useWallet } from '@/lib/useWallet'
 import type { Invoice } from '@/types/invoice'
+import { applyBaseAttribution } from '@/lib/attribution'
 
 const USDC_SEPOLIA: `0x${string}` =
   '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
@@ -254,7 +255,7 @@ export function PayClient({ id }: { id: string }) {
       const txForWallet: Record<string, unknown> = {
         from: address,
         to: USDC_SEPOLIA,
-        data: transferData,
+        data: applyBaseAttribution(transferData),
         value: '0x0'
       }
 
