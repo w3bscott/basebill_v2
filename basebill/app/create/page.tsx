@@ -1,6 +1,6 @@
+
 'use client'
 
-import Link from 'next/link'
 import { useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { toast } from 'sonner'
@@ -8,64 +8,42 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import ConnectButton from '@/components/ConnectButton'
+import { useWallet } from '@/lib/useWallet'
 import type { Invoice } from '@/types/invoice'
 
-const WALLET_STORAGE_KEY = 'basebill:creator-wallet'
-
-function getStoredWallet() {
-  if (typeof window === 'undefined') {
-    return ''
-  }
-
-  return window.localStorage.getItem(WALLET_STORAGE_KEY) ?? ''
-}
-
 export default function CreatePage() {
-  const [form, setForm] = useState(() => ({
-    creator_wallet: getStoredWallet(),
-    label: '',
-    amount_usdc: '',
-    description: '',
-    due_date: '',
-    forward_to: ''
-  }))
+  const { address, isConnected } = useWallet()
+  const [form, setForm] = useState({
+    label: '', amount_usdc: '', description: '', due_date: '', forward_to: ''
+  })
   const [loading, setLoading] = useState(false)
   const [invoice, setInvoice] = useState<Invoice | null>(null)
 
-  const sharePath = invoice ? `/pay/${invoice.id}` : ''
-  const shareUrl = invoice ? `${window.location.origin}${sharePath}` : ''
+  const shareUrl = invoice ? `${window.location.origin}/pay/${invoice.id}` : ''
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (!isConnected || !address) { toast.error('Connect your wallet first'); return }
+
     setLoading(true)
-
-    try {
-      const res = await fetch('/api/invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          amount_usdc: Number(form.amount_usdc),
-          creator_wallet: form.creator_wallet.trim()
-        })
+    const res = await fetch('/api/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...form,
+        amount_usdc: Number(form.amount_usdc),
+        creator_wallet: address.toLowerCase()  // fix 9
       })
+    })
 
-      const json = await res.json()
+    const json = await res.json()
+    setLoading(false)
+    if (!res.ok) { toast.error(json.error); return }
 
-      if (!res.ok) {
-        toast.error(json.error ?? 'Unable to create invoice.')
-        return
-      }
-
-      window.localStorage.setItem(WALLET_STORAGE_KEY, form.creator_wallet.trim())
-      setInvoice(json.invoice)
-      await navigator.clipboard.writeText(`${window.location.origin}/pay/${json.invoice.id}`)
-      toast.success('Invoice created! Link copied.')
-    } catch {
-      toast.error('Something went wrong while creating the invoice.')
-    } finally {
-      setLoading(false)
-    }
+    setInvoice(json.invoice)
+    navigator.clipboard.writeText(`${window.location.origin}/pay/${json.invoice.id}`)
+    toast.success('Invoice created! Link copied.')
   }
 
   if (invoice) {
@@ -74,17 +52,11 @@ export default function CreatePage() {
         <Card className="w-full max-w-md">
           <CardHeader><CardTitle>Invoice Created</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <p className="text-sm break-all text-muted-foreground">{shareUrl}</p>
-            <Link href={sharePath}>
-              <Button>Open Payment Page</Button>
-            </Link>
-            <Button
-              variant="outline"
-              onClick={async () => {
-                await navigator.clipboard.writeText(shareUrl)
-                toast.success('Link copied!')
-              }}
-            >
+            <p className="text-sm text-muted-foreground break-all">{shareUrl}</p>
+            <Button variant="outline" onClick={() => {
+              navigator.clipboard.writeText(shareUrl)
+              toast.success('Link copied!')
+            }}>
               Copy Link
             </Button>
             <div className="flex justify-center pt-2">
@@ -102,68 +74,40 @@ export default function CreatePage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-8">
       <Card className="w-full max-w-md">
-        <CardHeader><CardTitle>New Invoice</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>New Invoice</CardTitle>
+          <div className="pt-1"><ConnectButton /></div>
+        </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1">
-              <Label htmlFor="creator-wallet">Creator Wallet *</Label>
-              <Input
-                id="creator-wallet"
-                required
-                placeholder="0x..."
-                value={form.creator_wallet}
-                onChange={e => setForm(f => ({ ...f, creator_wallet: e.target.value }))}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
               <Label htmlFor="label">Invoice Label *</Label>
-              <Input
-                id="label"
-                required
-                value={form.label}
-                onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
-              />
+              <Input id="label" required value={form.label}
+                onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
             </div>
             <div className="flex flex-col gap-1">
               <Label htmlFor="amount">Amount (USDC) *</Label>
-              <Input
-                id="amount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
+              <Input id="amount" type="number" min="0.01" step="0.01" required
                 value={form.amount_usdc}
-                onChange={e => setForm(f => ({ ...f, amount_usdc: e.target.value }))}
-              />
+                onChange={e => setForm(f => ({ ...f, amount_usdc: e.target.value }))} />
             </div>
             <div className="flex flex-col gap-1">
               <Label htmlFor="desc">Description</Label>
-              <Input
-                id="desc"
-                value={form.description}
-                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              />
+              <Input id="desc" value={form.description}
+                onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
             </div>
             <div className="flex flex-col gap-1">
               <Label htmlFor="due">Due Date</Label>
-              <Input
-                id="due"
-                type="date"
-                value={form.due_date}
-                onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
-              />
+              <Input id="due" type="date" value={form.due_date}
+                onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} />
             </div>
             <div className="flex flex-col gap-1">
               <Label htmlFor="fwd">Treasury Forward Address</Label>
-              <Input
-                id="fwd"
-                placeholder="0x..."
-                value={form.forward_to}
-                onChange={e => setForm(f => ({ ...f, forward_to: e.target.value }))}
-              />
+              <Input id="fwd" placeholder="0x..." value={form.forward_to}
+                onChange={e => setForm(f => ({ ...f, forward_to: e.target.value }))} />
             </div>
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Creating...' : 'Create Invoice'}
+            <Button type="submit" disabled={loading || !isConnected}>
+              {!isConnected ? 'Connect wallet to continue' : loading ? 'Creating...' : 'Create Invoice'}
             </Button>
           </form>
         </CardContent>
@@ -171,3 +115,182 @@ export default function CreatePage() {
     </main>
   )
 }
+
+
+
+
+
+
+// 'use client'
+
+// import Link from 'next/link'
+// import { useState } from 'react'
+// import { QRCodeSVG } from 'qrcode.react'
+// import { toast } from 'sonner'
+// import { Button } from '@/components/ui/button'
+// import { Input } from '@/components/ui/input'
+// import { Label } from '@/components/ui/label'
+// import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+// import type { Invoice } from '@/types/invoice'
+
+// const WALLET_STORAGE_KEY = 'basebill:creator-wallet'
+
+// function getStoredWallet() {
+//   if (typeof window === 'undefined') {
+//     return ''
+//   }
+
+//   return window.localStorage.getItem(WALLET_STORAGE_KEY) ?? ''
+// }
+
+// export default function CreatePage() {
+//   const [form, setForm] = useState(() => ({
+//     creator_wallet: getStoredWallet(),
+//     label: '',
+//     amount_usdc: '',
+//     description: '',
+//     due_date: '',
+//     forward_to: ''
+//   }))
+//   const [loading, setLoading] = useState(false)
+//   const [invoice, setInvoice] = useState<Invoice | null>(null)
+
+//   const sharePath = invoice ? `/pay/${invoice.id}` : ''
+//   const shareUrl = invoice ? `${window.location.origin}${sharePath}` : ''
+
+//   async function handleSubmit(e: React.FormEvent) {
+//     e.preventDefault()
+//     setLoading(true)
+
+//     try {
+//       const res = await fetch('/api/invoices', {
+//         method: 'POST',
+//         headers: { 'Content-Type': 'application/json' },
+//         body: JSON.stringify({
+//           ...form,
+//           amount_usdc: Number(form.amount_usdc),
+//           creator_wallet: form.creator_wallet.trim()
+//         })
+//       })
+
+//       const json = await res.json()
+
+//       if (!res.ok) {
+//         toast.error(json.error ?? 'Unable to create invoice.')
+//         return
+//       }
+
+//       window.localStorage.setItem(WALLET_STORAGE_KEY, form.creator_wallet.trim())
+//       setInvoice(json.invoice)
+//       await navigator.clipboard.writeText(`${window.location.origin}/pay/${json.invoice.id}`)
+//       toast.success('Invoice created! Link copied.')
+//     } catch {
+//       toast.error('Something went wrong while creating the invoice.')
+//     } finally {
+//       setLoading(false)
+//     }
+//   }
+
+//   if (invoice) {
+//     return (
+//       <main className="flex min-h-screen flex-col items-center justify-center p-8">
+//         <Card className="w-full max-w-md">
+//           <CardHeader><CardTitle>Invoice Created</CardTitle></CardHeader>
+//           <CardContent className="flex flex-col gap-4">
+//             <p className="text-sm break-all text-muted-foreground">{shareUrl}</p>
+//             <Link href={sharePath}>
+//               <Button>Open Payment Page</Button>
+//             </Link>
+//             <Button
+//               variant="outline"
+//               onClick={async () => {
+//                 await navigator.clipboard.writeText(shareUrl)
+//                 toast.success('Link copied!')
+//               }}
+//             >
+//               Copy Link
+//             </Button>
+//             <div className="flex justify-center pt-2">
+//               <QRCodeSVG value={shareUrl} size={180} />
+//             </div>
+//             <Button variant="ghost" onClick={() => setInvoice(null)}>
+//               Create another
+//             </Button>
+//           </CardContent>
+//         </Card>
+//       </main>
+//     )
+//   }
+
+//   return (
+//     <main className="flex min-h-screen flex-col items-center justify-center p-8">
+//       <Card className="w-full max-w-md">
+//         <CardHeader><CardTitle>New Invoice</CardTitle></CardHeader>
+//         <CardContent>
+//           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="creator-wallet">Creator Wallet *</Label>
+//               <Input
+//                 id="creator-wallet"
+//                 required
+//                 placeholder="0x..."
+//                 value={form.creator_wallet}
+//                 onChange={e => setForm(f => ({ ...f, creator_wallet: e.target.value }))}
+//               />
+//             </div>
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="label">Invoice Label *</Label>
+//               <Input
+//                 id="label"
+//                 required
+//                 value={form.label}
+//                 onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
+//               />
+//             </div>
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="amount">Amount (USDC) *</Label>
+//               <Input
+//                 id="amount"
+//                 type="number"
+//                 min="0.01"
+//                 step="0.01"
+//                 required
+//                 value={form.amount_usdc}
+//                 onChange={e => setForm(f => ({ ...f, amount_usdc: e.target.value }))}
+//               />
+//             </div>
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="desc">Description</Label>
+//               <Input
+//                 id="desc"
+//                 value={form.description}
+//                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+//               />
+//             </div>
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="due">Due Date</Label>
+//               <Input
+//                 id="due"
+//                 type="date"
+//                 value={form.due_date}
+//                 onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
+//               />
+//             </div>
+//             <div className="flex flex-col gap-1">
+//               <Label htmlFor="fwd">Treasury Forward Address</Label>
+//               <Input
+//                 id="fwd"
+//                 placeholder="0x..."
+//                 value={form.forward_to}
+//                 onChange={e => setForm(f => ({ ...f, forward_to: e.target.value }))}
+//               />
+//             </div>
+//             <Button type="submit" disabled={loading}>
+//               {loading ? 'Creating...' : 'Create Invoice'}
+//             </Button>
+//           </form>
+//         </CardContent>
+//       </Card>
+//     </main>
+//   )
+// }
